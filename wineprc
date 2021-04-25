@@ -2,7 +2,7 @@
 
 usage() {
     cat << EOF
-Usage: $PROGNAME [options] [-d <dns-ip>] [-p <proxy-type> <ip> <port>] -c <command>
+Usage:
 
     -h, --help              Show this help
 
