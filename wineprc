@@ -1,0 +1,147 @@
+#!/bin/bash
+
+usage() {
+    cat << EOF
+Usage: $PROGNAME [options] [-d <dns-ip>] [-p <proxy-type> <ip> <port>] -c <command>
+
+    -h, --help              Show this help
+
+    -l, --list              List all running wine processes
+    
+    -k <WINEPREFIX>         Kill a running WINEPREFIX.
+                            Use 'all' to kill all WINEPREFIX
+    -kk                     Same as '-k' but kill with SIGKILL
+EOF
+}
+
+INFO=()
+
+function get_windows_titles_by_pid() {
+    local PID="$1"
+    wmctrl -l -p | awk -v PID="$PID" '($3 == PID) {$1="";$2="";$3="";$4=""; print $0}' | sed  's/^ *//g'
+}
+
+function get_all_wine_processes() {
+    local i="0";
+    local ALL_PIDS="$(ps -eo pid| tail -n +2)"
+    
+    function echo_columns() {
+        echo "$WINEPREFIX"
+        echo "$PID"
+        echo "$STATUS"
+        echo "$WINESERVER_PATH"
+        echo "$COMM"
+        echo "$CMDLINE"
+        echo "$TITLES_P"
+    }
+    while read PID
+    do
+        WINESERVER_PATH="$(readlink -f "/proc/$PID/exe" | grep -E "/wineserver$|/wine(64)?-preloader$")"
+        if [[ $WINESERVER_PATH ]]; then
+            STATUS="$(cat /proc/$PID/status | grep -E "^State:" | awk '{print $2}' )"
+            if [[ $STATUS == "Z" ]]; then
+                STATUS="Dead"
+            else
+                STATUS="Normal"
+            fi
+            
+            COMM="$(cat /proc/$PID/comm)"
+            
+            CMDLINE="$(xargs -0 -a /proc/$PID/cmdline | sed -E 's/ *$//g')"
+            
+            WINEPREFIX_LINE=$(xargs -0 -L1 -a /proc/$PID/environ | grep -E "^WINEPREFIX=")
+            if [[ "$WINEPREFIX_LINE" ]]; then
+                WINEPREFIX="${WINEPREFIX_LINE#*=}"
+                WINEPREFIX="$(readlink -f "$WINEPREFIX")"
+            else
+                WINEPREFIX="Default"
+            fi
+            
+            WINDOWS_TITLES="$(get_windows_titles_by_pid $PID)"
+            TITLES_P=""
+            while read -r TITLE 
+            do
+                [[ "$TITLE" ]] && TITLES_P="$TITLES_P [$TITLE]"
+            done < <(echo "$WINDOWS_TITLES")
+
+            INFO[i]="$(echo_columns)"
+            ((i++))
+            
+        fi
+    done < <(echo "$ALL_PIDS")
+}
+
+function print_infos() {
+    for (( i=0; i<${#INFO[@]}; i++))
+    do
+        while read -r line 
+        do
+            echo -n "$line"
+            echo -e -n "\t"
+        done < <(echo "${INFO[i]}") 
+        echo ""
+    done
+}
+
+function list() {
+    get_all_wine_processes 
+    echo -e "WINEPREFIX\tPID\tStatus\tUnixBinary\tComm\tCmdLine\tWindowTitles"
+    print_infos | sort
+}
+
+function killwine() {
+    local PREFIX_2_KILL="$1"
+    local SIGNAL="$2"
+    
+    local PREFIX
+    local PID
+    local COMM
+    
+    get_all_wine_processes 
+    
+    [[ ! "$SIGNAL" ]] && SIGNAL="SIGINT"
+    
+    for (( i=0; i<${#INFO[@]}; i++))
+    do
+        PREFIX="$(echo "${INFO[i]}" | sed -n '1p')"
+        PID="$(echo "${INFO[i]}" | sed -n '2p')"
+        COMM="$(echo "${INFO[i]}" | sed -n '5p')"
+        if [[ "$PREFIX_2_KILL" == "all" || "$PREFIX_2_KILL" == "$PREFIX" ]] ; then
+            echo "Killing ($SIGNAL) $PID $COMM"
+            kill -s $SIGNAL $PID 2>/dev/null
+        fi
+            
+    done
+}
+
+[[ ! "$1" ]] && usage && exit 0
+
+while [[ -n "$1" ]]; do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -l|--list)
+            list
+            exit 0
+            break
+            ;;
+        -k)
+            shift
+            killwine "$1"
+            exit
+            break
+            ;;
+        -kk)
+            shift
+            killwine "$1" SIGKILL
+            exit
+            break
+            ;;
+        *)
+            echo  "Invalid parameter: $1" 1>&2
+            exit 1
+            ;;
+    esac
+done
